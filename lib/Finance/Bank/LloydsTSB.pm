@@ -35,7 +35,7 @@ use warnings;
 
 use Carp;
 
-our $VERSION = '1.31';
+our $VERSION = '1.32';
 our $DEBUG = 0;
 
 use Carp qw(carp cluck croak confess);
@@ -275,7 +275,7 @@ to me, but is provided under B<NO GUARANTEE>, explicit or implied.
 
 =head1 AUTHORS
 
-Original by Simon Cozens C<simon@cpan.org>
+Original by Simon Cozens <simon@cpan.org>
 
 Improvements by Adam Spiers <aspiers@cpan.org>
 
