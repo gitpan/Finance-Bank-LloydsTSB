@@ -12,14 +12,22 @@ Finance::Bank::LloydsTSB - Check your bank accounts from Perl
         password  => $password
         memorable => $memorable_phrase
   );
+
+  my $total = 0;
+  my $format = "%20s : %21s : GBP %9.2f\n";
   for my $acc (@accounts) {
-    printf "%20s : %8s / %19s : GBP %9.2f\n",
-      $acc->name, ($acc->sort_code || ''), $acc->account_no, $acc->balance;
+    $total += $acc->balance;
+    printf $format, $acc->name, $acc->descr_num, $acc->balance;
   }
+  print "-" x 70, "\n";
+  printf $format, 'TOTAL', '', $total;
+
   my $statement = $accounts[0]->fetch_statement;
 
   # Retrieve QIF for all transactions in January 2008.
   my $qif = $accounts[1]->download_statement(2008, 01, 01, 5);
+
+See F<fetch-statement.pl> for a working example.
 
 =head1 DESCRIPTION
 
@@ -35,7 +43,7 @@ use warnings;
 
 use Carp;
 
-our $VERSION = '1.34';
+our $VERSION = '1.35';
 our $DEBUG = 0;
 
 use Carp qw(carp cluck croak confess);
@@ -46,10 +54,13 @@ use Finance::Bank::LloydsTSB::utils qw(debug trim);
 use Finance::Bank::LloydsTSB::Account;
 
 our $ua = WWW::Mechanize->new(
-    env_proxy => 1, 
+    env_proxy  => 1, 
     keep_alive => 1, 
-    timeout => 30,
+    timeout    => 30,
+    autocheck  => 1,
 ); 
+
+our $logged_in = 0;
 
 =head1 CLASS METHODS
 
@@ -59,25 +70,30 @@ sub _login {
     my $self = shift;
 
     $ua->get("https://online.lloydstsb.co.uk/customer.ibc");
-    my $field = $ua->current_form->find_input("UserId1");
-    $field->{type}="input";
-    bless $field, "HTML::Form::TextInput";
+    my $form = $ua->current_form;
+    die "Couldn't get current_form" unless $form && $form->isa("HTML::Form");
+    my $field = $form->find_input("UserId1");
+    die "Couldn't find UserId1 input field" unless $field;
     $ua->field(UserId1  => $self->{username});
     $ua->field(Password => $self->{password});
     $ua->click;
 
+    croak "Couldn't log in; check your password and username\n" . $ua->content
+      unless $ua->content =~ /memorable\s+information/i;
+
     # Now we're at the new "memorable information" page, so parse that
     # and input the right form data.
 
-    for (0..2) {
+    for my $i (0..2) {
         my $key;
-        eval { $key = $ua->current_form->find_input("ResponseKey$_")->value; };
-        croak "Couldn't log in; check your password and username" if $@;
+        eval { $key = $ua->current_form->find_input("ResponseKey$i")->value; };
+        die "Couldn't find ResponseKey$i on memorable info page; has the login process changed?" if $@;
         my $value = substr(lc $self->{memorable}, $key-1, 1);
-        $ua->field("ResponseValue$_" => $value);
+        $ua->field("ResponseValue$i" => $value);
     }
 
     $ua->click;
+    $logged_in = 1;
 }
 
 =head2 get_accounts(username => $u, password => $p, memorable => $m)
@@ -102,8 +118,11 @@ sub get_accounts {
         $ua->click;
     }
 
-    croak "Failed memorable info stage:", $ua->content
-      unless $ua->content =~ /Account\s+list/i;
+    croak "Couldn't find account overview at memorable info stage:", $ua->content
+      unless $ua->content =~ /Account\s+Overview/;
+
+    my $html = $ua->content;
+    $html =~ s/&nbsp;?/ /g;
 
     # Now we have the account list page; we need to parse it.
     my $te = new HTML::TableExtract(
@@ -118,11 +137,9 @@ sub get_accounts {
         # a bug which includes start tag in the text segment.
         # keep_html => 1,
     );
-    my $html = $ua->content;
-    $html =~ s/&nbsp;?/ /g;
     $te->parse($html);
     my @tables = $te->tables;
-    croak "HTML::TableExtract failed to find table" unless @tables;
+    croak "HTML::TableExtract failed to find table:\n$html" unless @tables;
     croak "HTML::TableExtract found >1 tables" unless @tables == 1;
 
     my $acc_action_forms = $class->_get_acc_action_form_mapping;
@@ -243,9 +260,12 @@ no doubt have in their backend database.
 
 sub logoff {
     my $class = shift;
-    return unless $ua;
+    return unless $ua and $logged_in;
     if ($ua->follow_link( text_regex => qr/Logoff/ )) {
         $class->debug("Logged off\n");
+    }
+    else {
+        warn "Couldn't find Logoff button\n";
     }
 }
 
